@@ -1,0 +1,10 @@
+{
+    "title": "JMOD Area Spawner",
+    "type": "entity",
+    "tags": ["fun", "build"],
+    "ignore": [
+        "*.psd",
+        "*.vcproj",
+        "*.svn*"
+    ]
+}
