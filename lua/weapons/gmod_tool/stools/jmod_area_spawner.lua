@@ -10,7 +10,7 @@ if CLIENT then
     language.Add("tool.jmod_area_spawner.hideborders", "Не отображать границу зоны")
     language.Add("tool.jmod_area_spawner.spawninterval", "Интервал времени для спавна (в секундах)")
     language.Add("tool.jmod_area_spawner.maxobjects", "Максимальное количество объектов в зоне")
-    language.Add("tool.jmod_area_spawner.spawnobject", "Объект для спавна")
+    language.Add("tool.jmod_area_spawner.spawnobject", "Объекты для спавна (разделенные точкой с запятой и пробелом)")
     language.Add("tool.jmod_area_spawner.npcweapon", "Оружие для НИПов")
 end
 
@@ -63,11 +63,11 @@ function TOOL:SpawnEntitiesAndMarkers()
     local hideBorders = self:GetClientNumber("hideborders") == 1
     local spawnInterval = self:GetClientNumber("spawninterval")
     local maxObjects = self:GetClientNumber("maxobjects")
-    local spawnObject = self:GetClientInfo("spawnobject")
+    local spawnObjects = self:GetClientInfo("spawnobject")
     local npcWeapon = self:GetClientInfo("npcweapon")
 
-    if selectedZone == "Custom zone" and spawnObject == "" then
-        ply:ChatPrint("Please specify an object to spawn in the custom zone!")
+    if selectedZone == "Custom zone" and spawnObjects == "" then
+        ply:ChatPrint("Please specify objects to spawn in the custom zone!")
         return
     end
 
@@ -118,7 +118,7 @@ function TOOL:SpawnEntitiesAndMarkers()
     self.SpawnedEntities[zoneEnt] = self.SpawnedEntities[zoneEnt] or {}
 
     -- Спавним объекты внутри зоны
-    self:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObject, npcWeapon)
+    self:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjects, npcWeapon)
 
     -- Добавляем таймер для периодического спавна объектов
     local timerName = "JModAreaSpawner_Timer_" .. zoneEnt:EntIndex()
@@ -128,7 +128,7 @@ function TOOL:SpawnEntitiesAndMarkers()
             timer.Remove(timerName)
             return
         end
-        self:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObject, npcWeapon)
+        self:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjects, npcWeapon)
     end)
 
     -- Добавляем возможность удаления зоны по клавише Z
@@ -138,7 +138,7 @@ function TOOL:SpawnEntitiesAndMarkers()
     undo.Finish()
 end
 
-function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObject, npcWeapon)
+function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjects, npcWeapon)
     -- Удаляем невалидные объекты из таблицы
     self.SpawnedEntities[zoneEnt] = self.SpawnedEntities[zoneEnt] or {}
     for i = #self.SpawnedEntities[zoneEnt], 1, -1 do
@@ -152,7 +152,7 @@ function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjec
         return
     end
 
-    local items = area and area.items or {spawnObject}
+    local items = area and area.items or string.Split(spawnObjects, "; ")
 
     for _, item in ipairs(items) do
         if #self.SpawnedEntities[zoneEnt] >= maxObjects then
@@ -252,7 +252,7 @@ function TOOL.BuildCPanel(CPanel)
         Max = "100"
     })
 
-    -- Добавляем поле для ввода объекта спавна для пользовательской зоны
+    -- Добавляем поле для ввода объектов спавна для пользовательской зоны
     CPanel:AddControl("TextBox", {
         Label = "#tool.jmod_area_spawner.spawnobject",
         Command = "jmod_area_spawner_spawnobject",
