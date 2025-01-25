@@ -1,7 +1,6 @@
--- jmod_area_spawner.lua
+-- lua/autorun/jmod_area_spawner.lua
 print("JMOD Area Spawner addon loaded!")
 
--- Загружаем данные из spawnareas.lua
 include("spawnareas.lua")
 
 for _, area in ipairs(spawnareas) do
@@ -11,5 +10,3 @@ for _, area in ipairs(spawnareas) do
     end
     print("  Chance: " .. area.chance)
 end
-
--- Здесь вы можете добавить код для создания областей спавна на основе данных из spawnareas

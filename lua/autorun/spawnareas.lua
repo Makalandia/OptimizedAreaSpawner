@@ -1,3 +1,4 @@
+-- lua/autorun/spawnareas.lua
 spawnareas = {
     {
         name = "Area1",
