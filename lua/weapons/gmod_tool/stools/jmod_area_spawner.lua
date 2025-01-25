@@ -12,6 +12,9 @@ if CLIENT then
     language.Add("tool.jmod_area_spawner.maxobjects", "Максимальное количество объектов в зоне")
     language.Add("tool.jmod_area_spawner.spawnobject", "Объекты для спавна (разделенные точкой с запятой и пробелом)")
     language.Add("tool.jmod_area_spawner.npcweapon", "Оружие для НИПов")
+    language.Add("tool.jmod_area_spawner.clearobjects", "Удалить все объекты")
+    language.Add("tool.jmod_area_spawner.pausespawn", "Приостановить спавн")
+    language.Add("tool.jmod_area_spawner.resumespawn", "Продолжить спавн")
 end
 
 TOOL.ClientConVar["zone"] = "Area1"
@@ -25,6 +28,7 @@ TOOL.Point1 = nil
 TOOL.Point2 = nil
 TOOL.SpawnTimers = {} -- Таблица для хранения таймеров
 TOOL.SpawnedEntities = {}
+TOOL.SpawnPaused = false -- Флаг для отслеживания состояния спавна
 
 function TOOL:LeftClick(trace)
     if CLIENT then return true end
@@ -124,8 +128,7 @@ function TOOL:SpawnEntitiesAndMarkers()
     local timerName = "JModAreaSpawner_Timer_" .. zoneEnt:EntIndex()
     self.SpawnTimers[zoneEnt:EntIndex()] = timerName
     timer.Create(timerName, spawnInterval, 0, function()
-        if not IsValid(zoneEnt) then
-            timer.Remove(timerName)
+        if not IsValid(zoneEnt) or self.SpawnPaused then
             return
         end
         self:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjects, npcWeapon)
@@ -198,6 +201,26 @@ function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjec
     end
 end
 
+-- Добавляем функцию для удаления всех объектов, созданных всеми зонами
+function TOOL:ClearAllSpawnedEntities()
+    for _, entities in pairs(self.SpawnedEntities) do
+        for _, ent in ipairs(entities) do
+            if IsValid(ent) then
+                ent:Remove()
+            end
+        end
+    end
+end
+
+-- Добавляем функции для приостановки и продолжения спавна
+function TOOL:PauseSpawning()
+    self.SpawnPaused = true
+end
+
+function TOOL:ResumeSpawning()
+    self.SpawnPaused = false
+end
+
 function TOOL:CreateMarker(pos, hideBorders)
     local marker = ents.Create("prop_physics")
     marker:SetModel("models/hunter/blocks/cube025x025x025.mdl")
@@ -265,4 +288,70 @@ function TOOL.BuildCPanel(CPanel)
         Command = "jmod_area_spawner_npcweapon",
         MaxLength = "256",
     })
+
+    -- Добавляем кнопку для удаления всех объектов
+    CPanel:AddControl("Button", {
+        Label = "#tool.jmod_area_spawner.clearobjects",
+        Command = "jmod_area_spawner_clearobjects",
+        Text = "Удалить все объекты",
+    })
+
+    -- Добавляем кнопку для приостановки спавна
+    CPanel:AddControl("Button", {
+        Label = "#tool.jmod_area_spawner.pausespawn",
+        Command = "jmod_area_spawner_pausespawn",
+        Text = "Приостановить спавн",
+    })
+
+    -- Добавляем кнопку для продолжения спавна
+    CPanel:AddControl("Button", {
+        Label = "#tool.jmod_area_spawner.resumespawn",
+        Command = "jmod_area_spawner_resumespawn",
+        Text = "Продолжить спавн",
+    })
+end
+
+-- Обрабатываем команды для удаления всех объектов, приостановки и продолжения спавна
+if SERVER then
+    concommand.Add("jmod_area_spawner_clearobjects", function(ply, cmd, args)
+        if IsValid(ply) and ply:IsAdmin() then
+            local tool = ply:GetWeapon("gmod_tool").Tool["jmod_area_spawner"]
+            if tool then
+                tool:ClearAllSpawnedEntities()
+                ply:ChatPrint("All spawned entities have been removed.")
+            else
+                ply:ChatPrint("Failed to find the JMod Area Spawner tool.")
+            end
+        else
+            ply:ChatPrint("You do not have permission to use this command.")
+        end
+    end)
+
+    concommand.Add("jmod_area_spawner_pausespawn", function(ply, cmd, args)
+        if IsValid(ply) and ply:IsAdmin() then
+            local tool = ply:GetWeapon("gmod_tool").Tool["jmod_area_spawner"]
+            if tool then
+                tool:PauseSpawning()
+                ply:ChatPrint("Spawning has been paused.")
+            else
+                ply:ChatPrint("Failed to find the JMod Area Spawner tool.")
+            end
+        else
+            ply:ChatPrint("You do not have permission to use this command.")
+        end
+    end)
+
+    concommand.Add("jmod_area_spawner_resumespawn", function(ply, cmd, args)
+        if IsValid(ply) and ply:IsAdmin() then
+            local tool = ply:GetWeapon("gmod_tool").Tool["jmod_area_spawner"]
+            if tool then
+                tool:ResumeSpawning()
+                ply:ChatPrint("Spawning has been resumed.")
+            else
+                ply:ChatPrint("Failed to find the JMod Area Spawner tool.")
+            end
+        else
+            ply:ChatPrint("You do not have permission to use this command.")
+        end
+    end)
 end
