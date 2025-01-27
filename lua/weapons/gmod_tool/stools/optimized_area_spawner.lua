@@ -1,34 +1,39 @@
--- lua/weapons/gmod_tool/stools/jmod_area_spawner.lua
+-- lua/weapons/gmod_tool/stools/optimized_area_spawner.lua
 
 TOOL.Category = "Construction"
-TOOL.Name = "JMod Area Spawner"
+TOOL.Name = "Optimized Area Spawner"
 
 if CLIENT then
-    language.Add("tool.jmod_area_spawner.name", "JMod Area Spawner")
-    language.Add("tool.jmod_area_spawner.desc", "Spawns predefined areas with entities")
-    language.Add("tool.jmod_area_spawner.0", "Left-click to set the first point, right-click to set the second point and spawn objects")
-    language.Add("tool.jmod_area_spawner.hideborders", "Не отображать границу зоны")
-    language.Add("tool.jmod_area_spawner.spawninterval", "Интервал времени для спавна (в секундах)")
-    language.Add("tool.jmod_area_spawner.maxobjects", "Максимальное количество объектов в зоне")
-    language.Add("tool.jmod_area_spawner.spawnobject", "Объекты для спавна (разделенные точкой с запятой и пробелом)")
-    language.Add("tool.jmod_area_spawner.npcweapon", "Оружие для НИПов")
-    language.Add("tool.jmod_area_spawner.clearobjects", "Удалить все объекты")
-    language.Add("tool.jmod_area_spawner.pausespawn", "Приостановить спавн")
-    language.Add("tool.jmod_area_spawner.resumespawn", "Продолжить спавн")
+    language.Add("tool.optimized_area_spawner.name", "Optimized Area Spawner")
+    language.Add("tool.optimized_area_spawner.desc", "Spawns predefined areas with entities")
+    language.Add("tool.optimized_area_spawner.0", "Left-click to set the first point, right-click to set the second point and spawn objects")
+    language.Add("tool.optimized_area_spawner.hideborders", "Не отображать границу зоны")
+    language.Add("tool.optimized_area_spawner.minobjects", "Минимальное количество объектов в зоне")
+    language.Add("tool.optimized_area_spawner.maxobjects", "Максимальное количество объектов в зоне")
+    language.Add("tool.optimized_area_spawner.spawnobject", "Объекты для спавна (разделенные точкой с запятой и пробелом)")
+    language.Add("tool.optimized_area_spawner.npcweapon", "Оружие для НИПов")
+    language.Add("tool.optimized_area_spawner.clearobjects", "Удалить все объекты")
+    language.Add("tool.optimized_area_spawner.resumespawn", "Продолжить спавн")
+    language.Add("tool.optimized_area_spawner.spawnrange", "Дистанция активации спавна (в юнитах)")
+    language.Add("tool.optimized_area_spawner.delay", "Задержка спавна/деспавна (в секундах)")
 end
 
 TOOL.ClientConVar["zone"] = "Area1"
 TOOL.ClientConVar["hideborders"] = "0"
-TOOL.ClientConVar["spawninterval"] = "10"
+TOOL.ClientConVar["minobjects"] = "1"
 TOOL.ClientConVar["maxobjects"] = "10"
 TOOL.ClientConVar["spawnobject"] = ""
 TOOL.ClientConVar["npcweapon"] = "weapon_smg1" -- Оружие по умолчанию для НИПов
+TOOL.ClientConVar["spawnrange"] = "500" -- Дистанция активации спавна по умолчанию
+TOOL.ClientConVar["delay"] = "5" -- Задержка спавна/деспавна по умолчанию
 
 TOOL.Point1 = nil
 TOOL.Point2 = nil
-TOOL.SpawnTimers = {} -- Таблица для хранения таймеров
 TOOL.SpawnedEntities = {}
+TOOL.SpawnTimers = {} -- Инициализируем поле SpawnTimers
 TOOL.SpawnPaused = false -- Флаг для отслеживания состояния спавна
+TOOL.PlayerInZone = {} -- Таблица для отслеживания, находится ли игрок в зоне
+TOOL.ZoneSleepTimers = {} -- Таймеры для отслеживания спячки зон
 
 function TOOL:LeftClick(trace)
     if CLIENT then return true end
@@ -65,10 +70,12 @@ function TOOL:SpawnEntitiesAndMarkers()
 
     local selectedZone = self:GetClientInfo("zone")
     local hideBorders = self:GetClientNumber("hideborders") == 1
-    local spawnInterval = self:GetClientNumber("spawninterval")
+    local minObjects = self:GetClientNumber("minobjects")
     local maxObjects = self:GetClientNumber("maxobjects")
     local spawnObjects = self:GetClientInfo("spawnobject")
     local npcWeapon = self:GetClientInfo("npcweapon")
+    local spawnRange = self:GetClientNumber("spawnrange")
+    local delay = self:GetClientNumber("delay")
 
     if selectedZone == "Custom zone" and spawnObjects == "" then
         ply:ChatPrint("Please specify objects to spawn in the custom zone!")
@@ -91,8 +98,9 @@ function TOOL:SpawnEntitiesAndMarkers()
         end
     end
 
-    local min = Vector(math.min(self.Point1.x, self.Point2.x), math.min(self.Point1.y, self.Point2.y), math.min(self.Point1.z, self.Point2.z))
-    local max = Vector(math.max(self.Point1.x, self.Point2.x), math.max(self.Point1.y, self.Point2.y), math.max(self.Point1.z, self.Point2.z))
+    -- Определяем минимальные и максимальные координаты зоны
+    local min = self.Point1
+    local max = self.Point2
 
     -- Создаем пропы для отображения границ зоны
     local marker1 = self:CreateMarker(min, hideBorders)
@@ -121,27 +129,54 @@ function TOOL:SpawnEntitiesAndMarkers()
     -- Инициализируем таблицу для хранения заспавненных объектов
     self.SpawnedEntities[zoneEnt] = self.SpawnedEntities[zoneEnt] or {}
 
-    -- Спавним объекты внутри зоны
-    self:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjects, npcWeapon)
-
-    -- Добавляем таймер для периодического спавна объектов
-    local timerName = "JModAreaSpawner_Timer_" .. zoneEnt:EntIndex()
+    -- Добавляем таймер для проверки дистанции до игрока
+    local timerName = "OptimizedAreaSpawner_CheckDistance_" .. zoneEnt:EntIndex()
     self.SpawnTimers[zoneEnt:EntIndex()] = timerName
-    timer.Create(timerName, spawnInterval, 0, function()
-        if not IsValid(zoneEnt) or self.SpawnPaused then
+    timer.Create(timerName, 1, 0, function()
+        if not IsValid(zoneEnt) then
+            timer.Remove(timerName)
             return
         end
-        self:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjects, npcWeapon)
+        self:CheckPlayerDistance(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon, spawnRange, delay)
     end)
 
     -- Добавляем возможность удаления зоны по клавише Z
-    undo.Create("JMod Area Zone")
+    undo.Create("Optimized Area Zone")
     undo.AddEntity(zoneEnt)
     undo.SetPlayer(ply)
     undo.Finish()
 end
 
-function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjects, npcWeapon)
+function TOOL:CheckPlayerDistance(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon, spawnRange, delay)
+    local ply = self:GetOwner()
+    if not IsValid(ply) then return end
+
+    local plyPos = ply:GetPos()
+    local zoneCenter = (min + max) / 2
+    local distance = plyPos:Distance(zoneCenter)
+
+    if distance <= spawnRange then
+        if not self.PlayerInZone[zoneEnt] and not self.ZoneSleepTimers[zoneEnt] then
+            self:SpawnObjectsInZone(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon)
+            self.PlayerInZone[zoneEnt] = true
+            self.ZoneSleepTimers[zoneEnt] = true
+            timer.Simple(delay, function()
+                self.ZoneSleepTimers[zoneEnt] = false
+            end)
+        end
+    else
+        if self.PlayerInZone[zoneEnt] and not self.ZoneSleepTimers[zoneEnt] then
+            self:ClearSpawnedEntitiesInZone(zoneEnt)
+            self.PlayerInZone[zoneEnt] = false
+            self.ZoneSleepTimers[zoneEnt] = true
+            timer.Simple(delay, function()
+                self.ZoneSleepTimers[zoneEnt] = false
+            end)
+        end
+    end
+end
+
+function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon)
     -- Удаляем невалидные объекты из таблицы
     self.SpawnedEntities[zoneEnt] = self.SpawnedEntities[zoneEnt] or {}
     for i = #self.SpawnedEntities[zoneEnt], 1, -1 do
@@ -155,16 +190,20 @@ function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjec
         return
     end
 
+    -- Спавним объекты случайным количеством в диапазоне от minObjects до maxObjects
+    local numObjectsToSpawn = math.random(minObjects, maxObjects)
     local items = area and area.items or string.Split(spawnObjects, "; ")
 
-    for _, item in ipairs(items) do
+    for i = 1, numObjectsToSpawn do
         if #self.SpawnedEntities[zoneEnt] >= maxObjects then
             break
         end
 
-        local pos = Vector(math.random(min.x, max.x), math.random(min.y, max.y), math.random(min.z, max.z))
+        -- Поднимаем позицию спавна на 50 юнитов вверх
+        local pos = Vector(math.random(min.x, max.x), math.random(min.y, max.y), math.random(min.z, max.z) + 50)
         local angle = Angle(0, math.random(0, 360), 0) -- Случайный угол поворота в плоскости XY
 
+        local item = items[math.random(#items)]
         local ent
         if item:sub(-4) == ".mdl" then
             -- Спавним пропы
@@ -197,6 +236,14 @@ function TOOL:SpawnObjectsInZone(area, min, max, zoneEnt, maxObjects, spawnObjec
             table.insert(self.SpawnedEntities[zoneEnt], ent)
         else
             print("Failed to create entity of type " .. item)
+        end
+    end
+end
+
+function TOOL:ClearSpawnedEntitiesInZone(zoneEnt)
+    for _, ent in ipairs(self.SpawnedEntities[zoneEnt] or {}) do
+        if IsValid(ent) then
+            ent:Remove()
         end
     end
 end
@@ -246,30 +293,30 @@ function TOOL.BuildCPanel(CPanel)
     end
 
     zoneList.OnSelect = function(panel, index, value)
-        RunConsoleCommand("jmod_area_spawner_zone", value)
+        RunConsoleCommand("optimized_area_spawner_zone", value)
     end
 
     CPanel:AddItem(zoneList)
 
     -- Добавляем чекбокс для скрытия границ зоны
     CPanel:AddControl("Checkbox", {
-        Label = "#tool.jmod_area_spawner.hideborders",
-        Command = "jmod_area_spawner_hideborders"
+        Label = "#tool.optimized_area_spawner.hideborders",
+        Command = "optimized_area_spawner_hideborders"
     })
 
-    -- Добавляем поле для ввода времени спавна
+    -- Добавляем поле для ввода минимального количества объектов
     CPanel:AddControl("Slider", {
-        Label = "#tool.jmod_area_spawner.spawninterval",
-        Command = "jmod_area_spawner_spawninterval",
-        Type = "Float",
+        Label = "#tool.optimized_area_spawner.minobjects",
+        Command = "optimized_area_spawner_minobjects",
+        Type = "Int",
         Min = "1",
-        Max = "60"
+        Max = "100"
     })
 
     -- Добавляем поле для ввода максимального количества объектов
     CPanel:AddControl("Slider", {
-        Label = "#tool.jmod_area_spawner.maxobjects",
-        Command = "jmod_area_spawner_maxobjects",
+        Label = "#tool.optimized_area_spawner.maxobjects",
+        Command = "optimized_area_spawner_maxobjects",
         Type = "Int",
         Min = "1",
         Max = "100"
@@ -277,78 +324,96 @@ function TOOL.BuildCPanel(CPanel)
 
     -- Добавляем поле для ввода объектов спавна для пользовательской зоны
     CPanel:AddControl("TextBox", {
-        Label = "#tool.jmod_area_spawner.spawnobject",
-        Command = "jmod_area_spawner_spawnobject",
+        Label = "#tool.optimized_area_spawner.spawnobject",
+        Command = "optimized_area_spawner_spawnobject",
         MaxLength = "256",
     })
 
     -- Добавляем поле для ввода оружия для НИПов
     CPanel:AddControl("TextBox", {
-        Label = "#tool.jmod_area_spawner.npcweapon",
-        Command = "jmod_area_spawner_npcweapon",
+        Label = "#tool.optimized_area_spawner.npcweapon",
+        Command = "optimized_area_spawner_npcweapon",
         MaxLength = "256",
+    })
+
+    -- Добавляем поле для ввода дистанции активации спавна
+    CPanel:AddControl("Slider", {
+        Label = "#tool.optimized_area_spawner.spawnrange",
+        Command = "optimized_area_spawner_spawnrange",
+        Type = "Int",
+        Min = "100",
+        Max = "10000"
+    })
+
+    -- Добавляем поле для ввода задержки спавна/деспавна
+    CPanel:AddControl("Slider", {
+        Label = "#tool.optimized_area_spawner.delay",
+        Command = "optimized_area_spawner_delay",
+        Type = "Int",
+        Min = "0",
+        Max = "60"
     })
 
     -- Добавляем кнопку для удаления всех объектов
     CPanel:AddControl("Button", {
-        Label = "#tool.jmod_area_spawner.clearobjects",
-        Command = "jmod_area_spawner_clearobjects",
+        Label = "#tool.optimized_area_spawner.clearobjects",
+        Command = "optimized_area_spawner_clearobjects",
         Text = "Удалить все объекты",
     })
 
     -- Добавляем кнопку для приостановки спавна
     CPanel:AddControl("Button", {
-        Label = "#tool.jmod_area_spawner.pausespawn",
-        Command = "jmod_area_spawner_pausespawn",
+        Label = "#tool.optimized_area_spawner.pausespawn",
+        Command = "optimized_area_spawner_pausespawn",
         Text = "Приостановить спавн",
     })
 
     -- Добавляем кнопку для продолжения спавна
     CPanel:AddControl("Button", {
-        Label = "#tool.jmod_area_spawner.resumespawn",
-        Command = "jmod_area_spawner_resumespawn",
+        Label = "#tool.optimized_area_spawner.resumespawn",
+        Command = "optimized_area_spawner_resumespawn",
         Text = "Продолжить спавн",
     })
 end
 
 -- Обрабатываем команды для удаления всех объектов, приостановки и продолжения спавна
 if SERVER then
-    concommand.Add("jmod_area_spawner_clearobjects", function(ply, cmd, args)
+    concommand.Add("optimized_area_spawner_clearobjects", function(ply, cmd, args)
         if IsValid(ply) and ply:IsAdmin() then
-            local tool = ply:GetWeapon("gmod_tool").Tool["jmod_area_spawner"]
+            local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
             if tool then
                 tool:ClearAllSpawnedEntities()
                 ply:ChatPrint("All spawned entities have been removed.")
             else
-                ply:ChatPrint("Failed to find the JMod Area Spawner tool.")
+                ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
             end
         else
             ply:ChatPrint("You do not have permission to use this command.")
         end
     end)
 
-    concommand.Add("jmod_area_spawner_pausespawn", function(ply, cmd, args)
+    concommand.Add("optimized_area_spawner_pausespawn", function(ply, cmd, args)
         if IsValid(ply) and ply:IsAdmin() then
-            local tool = ply:GetWeapon("gmod_tool").Tool["jmod_area_spawner"]
+            local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
             if tool then
                 tool:PauseSpawning()
                 ply:ChatPrint("Spawning has been paused.")
             else
-                ply:ChatPrint("Failed to find the JMod Area Spawner tool.")
+                ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
             end
         else
             ply:ChatPrint("You do not have permission to use this command.")
         end
     end)
 
-    concommand.Add("jmod_area_spawner_resumespawn", function(ply, cmd, args)
+    concommand.Add("optimized_area_spawner_resumespawn", function(ply, cmd, args)
         if IsValid(ply) and ply:IsAdmin() then
-            local tool = ply:GetWeapon("gmod_tool").Tool["jmod_area_spawner"]
+            local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
             if tool then
                 tool:ResumeSpawning()
                 ply:ChatPrint("Spawning has been resumed.")
             else
-                ply:ChatPrint("Failed to find the JMod Area Spawner tool.")
+                ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
             end
         else
             ply:ChatPrint("You do not have permission to use this command.")

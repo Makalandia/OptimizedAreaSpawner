@@ -1,5 +1,5 @@
 -- lua/autorun/jmod_area_spawner.lua
-print("JMOD Area Spawner addon loaded!")
+print("Optimized Area Spawner addon loaded!")
 
 include("spawnareas.lua")
 
