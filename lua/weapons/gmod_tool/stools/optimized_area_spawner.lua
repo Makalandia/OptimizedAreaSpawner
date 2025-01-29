@@ -16,6 +16,8 @@ if CLIENT then
     language.Add("tool.optimized_area_spawner.resumespawn", "Продолжить спавн")
     language.Add("tool.optimized_area_spawner.spawnrange", "Дистанция активации спавна (в юнитах)")
     language.Add("tool.optimized_area_spawner.delay", "Задержка спавна/деспавна (в секундах)")
+    language.Add("tool.optimized_area_spawner.savezones", "Сохранить зоны")
+    language.Add("tool.optimized_area_spawner.loadzones", "Загрузить зоны")
 end
 
 TOOL.ClientConVar["zone"] = "Area1"
@@ -34,6 +36,8 @@ TOOL.SpawnTimers = {} -- Инициализируем поле SpawnTimers
 TOOL.SpawnPaused = false -- Флаг для отслеживания состояния спавна
 TOOL.PlayerInZone = {} -- Таблица для отслеживания, находится ли игрок в зоне
 TOOL.ZoneSleepTimers = {} -- Таймеры для отслеживания спячки зон
+
+local saveFilePath = "optimized_area_spawner/zones.txt"
 
 function TOOL:LeftClick(trace)
     if CLIENT then return true end
@@ -129,6 +133,9 @@ function TOOL:SpawnEntitiesAndMarkers()
     -- Инициализируем таблицу для хранения заспавненных объектов
     self.SpawnedEntities[zoneEnt] = self.SpawnedEntities[zoneEnt] or {}
 
+    -- Создаем данные зоны
+    self:CreateZoneData(zoneEnt, min, max, area, minObjects, maxObjects, spawnObjects, npcWeapon, spawnRange, delay)
+
     -- Добавляем таймер для проверки дистанции до игрока
     local timerName = "OptimizedAreaSpawner_CheckDistance_" .. zoneEnt:EntIndex()
     self.SpawnTimers[zoneEnt:EntIndex()] = timerName
@@ -148,30 +155,33 @@ function TOOL:SpawnEntitiesAndMarkers()
 end
 
 function TOOL:CheckPlayerDistance(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon, spawnRange, delay)
-    local ply = self:GetOwner()
-    if not IsValid(ply) then return end
+    local players = player.GetAll()
+    
+    for _, ply in ipairs(players) do
+        if not IsValid(ply) then return end
 
-    local plyPos = ply:GetPos()
-    local zoneCenter = (min + max) / 2
-    local distance = plyPos:Distance(zoneCenter)
+        local plyPos = ply:GetPos()
+        local zoneCenter = (min + max) / 2
+        local distance = plyPos:Distance(zoneCenter)
 
-    if distance <= spawnRange then
-        if not self.PlayerInZone[zoneEnt] and not self.ZoneSleepTimers[zoneEnt] then
-            self:SpawnObjectsInZone(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon)
-            self.PlayerInZone[zoneEnt] = true
-            self.ZoneSleepTimers[zoneEnt] = true
-            timer.Simple(delay, function()
-                self.ZoneSleepTimers[zoneEnt] = false
-            end)
-        end
-    else
-        if self.PlayerInZone[zoneEnt] and not self.ZoneSleepTimers[zoneEnt] then
-            self:ClearSpawnedEntitiesInZone(zoneEnt)
-            self.PlayerInZone[zoneEnt] = false
-            self.ZoneSleepTimers[zoneEnt] = true
-            timer.Simple(delay, function()
-                self.ZoneSleepTimers[zoneEnt] = false
-            end)
+        if distance <= spawnRange then
+            if not self.PlayerInZone[zoneEnt] and not self.ZoneSleepTimers[zoneEnt] then
+                self:SpawnObjectsInZone(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon)
+                self.PlayerInZone[zoneEnt] = true
+                self.ZoneSleepTimers[zoneEnt] = true
+                timer.Simple(delay, function()
+                    self.ZoneSleepTimers[zoneEnt] = false
+                end)
+            end
+        else
+            if self.PlayerInZone[zoneEnt] and not self.ZoneSleepTimers[zoneEnt] then
+                self:ClearSpawnedEntitiesInZone(zoneEnt)
+                self.PlayerInZone[zoneEnt] = false
+                self.ZoneSleepTimers[zoneEnt] = true
+                timer.Simple(delay, function()
+                    self.ZoneSleepTimers[zoneEnt] = false
+                end)
+            end
         end
     end
 end
@@ -282,6 +292,94 @@ function TOOL:CreateMarker(pos, hideBorders)
     return marker
 end
 
+function TOOL:CreateZoneData(zoneEnt, min, max, area, minObjects, maxObjects, spawnObjects, npcWeapon, spawnRange, delay)
+    zoneEnt:SetNWVector("Min", min)
+    zoneEnt:SetNWVector("Max", max)
+    zoneEnt:SetNWString("Area", area)
+    zoneEnt:SetNWInt("MinObjects", minObjects)
+    zoneEnt:SetNWInt("MaxObjects", maxObjects)
+    zoneEnt:SetNWString("SpawnObjects", spawnObjects)
+    zoneEnt:SetNWString("NPCWeapon", npcWeapon)
+    zoneEnt:SetNWInt("SpawnRange", spawnRange)
+    zoneEnt:SetNWInt("Delay", delay)
+end
+
+function TOOL:RestoreZone(zoneEnt)
+    local min = zoneEnt:GetNWVector("Min")
+    local max = zoneEnt:GetNWVector("Max")
+    local area = zoneEnt:GetNWString("Area")
+    local minObjects = zoneEnt:GetNWInt("MinObjects")
+    local maxObjects = zoneEnt:GetNWInt("MaxObjects")
+    local spawnObjects = zoneEnt:GetNWString("SpawnObjects")
+    local npcWeapon = zoneEnt:GetNWString("NPCWeapon")
+    local spawnRange = zoneEnt:GetNWInt("SpawnRange")
+    local delay = zoneEnt:GetNWInt("Delay")
+    
+    self:CheckPlayerDistance(area, min, max, zoneEnt, minObjects, maxObjects, spawnObjects, npcWeapon, spawnRange, delay)
+end
+
+function TOOL:SaveZonesToFile()
+    local data = {}
+    for zoneEnt, _ in pairs(self.SpawnedEntities) do
+        if IsValid(zoneEnt) then
+            table.insert(data, {
+                min = zoneEnt:GetNWVector("Min"),
+                max = zoneEnt:GetNWVector("Max"),
+                area = zoneEnt:GetNWString("Area"),
+                minObjects = zoneEnt:GetNWInt("MinObjects"),
+                maxObjects = zoneEnt:GetNWInt("MaxObjects"),
+                spawnObjects = zoneEnt:GetNWString("SpawnObjects"),
+                npcWeapon = zoneEnt:GetNWString("NPCWeapon"),
+                spawnRange = zoneEnt:GetNWInt("SpawnRange"),
+                delay = zoneEnt:GetNWInt("Delay")
+            })
+        end
+    end
+
+    if not file.Exists("optimized_area_spawner", "DATA") then
+        file.CreateDir("optimized_area_spawner")
+    end
+
+    file.Write(saveFilePath, util.TableToJSON(data))
+    self:GetOwner():ChatPrint("Zones have been saved to file.")
+end
+
+function TOOL:LoadZonesFromFile()
+    if not file.Exists(saveFilePath, "DATA") then
+        self:GetOwner():ChatPrint("No saved zones found.")
+        return
+    end
+
+    local data = util.JSONToTable(file.Read(saveFilePath, "DATA"))
+    if not data then
+        self:GetOwner():ChatPrint("Failed to load zones from file.")
+        return
+    end
+
+    for _, zoneData in ipairs(data) do
+        self.Point1 = zoneData.min
+        self.Point2 = zoneData.max
+        self:SpawnEntitiesAndMarkers()
+        
+        -- Получаем последнее созданное zoneEnt
+        local zoneEnt = nil
+        for ent, _ in pairs(self.SpawnedEntities) do
+            zoneEnt = ent
+        end
+
+        -- Проверяем валидность zoneEnt перед вызовом CreateZoneData
+        if IsValid(zoneEnt) then
+            self:CreateZoneData(zoneEnt, zoneData.min, zoneData.max, zoneData.area, 
+                zoneData.minObjects, zoneData.maxObjects, zoneData.spawnObjects, 
+                zoneData.npcWeapon, zoneData.spawnRange, zoneData.delay)
+        else
+            self:GetOwner():ChatPrint("Failed to create zone entity.")
+        end
+    end
+
+    self:GetOwner():ChatPrint("Zones have been loaded from file.")
+end
+
 function TOOL.BuildCPanel(CPanel)
     CPanel:AddControl("Header", { Description = "Spawns predefined areas with entities" })
 
@@ -328,95 +426,127 @@ function TOOL.BuildCPanel(CPanel)
         Command = "optimized_area_spawner_spawnobject",
         MaxLength = "256",
     })
+-- Добавляем поле для ввода дистанции активации спавна
+CPanel:AddControl("Slider", {
+    Label = "#tool.optimized_area_spawner.spawnrange",
+    Command = "optimized_area_spawner_spawnrange",
+    Type = "Int",
+    Min = "100",
+    Max = "10000"
+})
 
-    -- Добавляем поле для ввода оружия для НИПов
-    CPanel:AddControl("TextBox", {
-        Label = "#tool.optimized_area_spawner.npcweapon",
-        Command = "optimized_area_spawner_npcweapon",
-        MaxLength = "256",
-    })
+-- Добавляем поле для ввода задержки спавна/деспавна
+CPanel:AddControl("Slider", {
+    Label = "#tool.optimized_area_spawner.delay",
+    Command = "optimized_area_spawner_delay",
+    Type = "Int",
+    Min = "0",
+    Max = "60"
+})
 
-    -- Добавляем поле для ввода дистанции активации спавна
-    CPanel:AddControl("Slider", {
-        Label = "#tool.optimized_area_spawner.spawnrange",
-        Command = "optimized_area_spawner_spawnrange",
-        Type = "Int",
-        Min = "100",
-        Max = "10000"
-    })
+-- Добавляем кнопку для удаления всех объектов
+CPanel:AddControl("Button", {
+    Label = "#tool.optimized_area_spawner.clearobjects",
+    Command = "optimized_area_spawner_clearobjects",
+    Text = "Удалить все объекты",
+})
 
-    -- Добавляем поле для ввода задержки спавна/деспавна
-    CPanel:AddControl("Slider", {
-        Label = "#tool.optimized_area_spawner.delay",
-        Command = "optimized_area_spawner_delay",
-        Type = "Int",
-        Min = "0",
-        Max = "60"
-    })
+-- Добавляем кнопку для приостановки спавна
+CPanel:AddControl("Button", {
+    Label = "#tool.optimized_area_spawner.pausespawn",
+    Command = "optimized_area_spawner_pausespawn",
+    Text = "Приостановить спавн",
+})
 
-    -- Добавляем кнопку для удаления всех объектов
-    CPanel:AddControl("Button", {
-        Label = "#tool.optimized_area_spawner.clearobjects",
-        Command = "optimized_area_spawner_clearobjects",
-        Text = "Удалить все объекты",
-    })
+-- Добавляем кнопку для продолжения спавна
+CPanel:AddControl("Button", {
+    Label = "#tool.optimized_area_spawner.resumespawn",
+    Command = "optimized_area_spawner_resumespawn",
+    Text = "Продолжить спавн",
+})
 
-    -- Добавляем кнопку для приостановки спавна
-    CPanel:AddControl("Button", {
-        Label = "#tool.optimized_area_spawner.pausespawn",
-        Command = "optimized_area_spawner_pausespawn",
-        Text = "Приостановить спавн",
-    })
+-- Добавляем кнопку для сохранения зон
+CPanel:AddControl("Button", {
+    Label = "#tool.optimized_area_spawner.savezones",
+    Command = "optimized_area_spawner_savezones",
+    Text = "Сохранить зоны",
+})
 
-    -- Добавляем кнопку для продолжения спавна
-    CPanel:AddControl("Button", {
-        Label = "#tool.optimized_area_spawner.resumespawn",
-        Command = "optimized_area_spawner_resumespawn",
-        Text = "Продолжить спавн",
-    })
+-- Добавляем кнопку для загрузки зон
+CPanel:AddControl("Button", {
+    Label = "#tool.optimized_area_spawner.loadzones",
+    Command = "optimized_area_spawner_loadzones",
+    Text = "Загрузить зоны",
+})
 end
 
--- Обрабатываем команды для удаления всех объектов, приостановки и продолжения спавна
+-- Обрабатываем команды для удаления всех объектов, приостановки и продолжения спавна, сохранения и загрузки зон
 if SERVER then
-    concommand.Add("optimized_area_spawner_clearobjects", function(ply, cmd, args)
-        if IsValid(ply) and ply:IsAdmin() then
-            local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
-            if tool then
-                tool:ClearAllSpawnedEntities()
-                ply:ChatPrint("All spawned entities have been removed.")
-            else
-                ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
-            end
+concommand.Add("optimized_area_spawner_clearobjects", function(ply, cmd, args)
+    if IsValid(ply) and ply:IsAdmin() then
+        local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
+        if tool then
+            tool:ClearAllSpawnedEntities()
+            ply:ChatPrint("All spawned entities have been removed.")
         else
-            ply:ChatPrint("You do not have permission to use this command.")
+            ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
         end
-    end)
+    else
+        ply:ChatPrint("You do not have permission to use this command.")
+    end
+end)
 
-    concommand.Add("optimized_area_spawner_pausespawn", function(ply, cmd, args)
-        if IsValid(ply) and ply:IsAdmin() then
-            local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
-            if tool then
-                tool:PauseSpawning()
-                ply:ChatPrint("Spawning has been paused.")
-            else
-                ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
-            end
+concommand.Add("optimized_area_spawner_pausespawn", function(ply, cmd, args)
+    if IsValid(ply) and ply:IsAdmin() then
+        local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
+        if tool then
+            tool:PauseSpawning()
+            ply:ChatPrint("Spawning has been paused.")
         else
-            ply:ChatPrint("You do not have permission to use this command.")
+            ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
         end
-    end)
+    else
+        ply:ChatPrint("You do not have permission to use this command.")
+    end
+end)
 
-    concommand.Add("optimized_area_spawner_resumespawn", function(ply, cmd, args)
-        if IsValid(ply) and ply:IsAdmin() then
-            local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
-            if tool then
-                tool:ResumeSpawning()
-                ply:ChatPrint("Spawning has been resumed.")
-            else
-                ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
-            end
+concommand.Add("optimized_area_spawner_resumespawn", function(ply, cmd, args)
+    if IsValid(ply) and ply:IsAdmin() then
+        local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
+        if tool then
+            tool:ResumeSpawning()
+            ply:ChatPrint("Spawning has been resumed.")
         else
-            ply:ChatPrint("You do not have permission to use this command.")
+            ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
         end
-    end)
+    else
+        ply:ChatPrint("You do not have permission to use this command.")
+    end
+end)
+
+concommand.Add("optimized_area_spawner_savezones", function(ply, cmd, args)
+    if IsValid(ply) and ply:IsAdmin() then
+        local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
+        if tool then
+            tool:SaveZonesToFile()
+        else
+            ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
+        end
+    else
+        ply:ChatPrint("You do not have permission to use this command.")
+    end
+end)
+
+concommand.Add("optimized_area_spawner_loadzones", function(ply, cmd, args)
+    if IsValid(ply) and ply:IsAdmin() then
+        local tool = ply:GetWeapon("gmod_tool").Tool["optimized_area_spawner"]
+        if tool then
+            tool:LoadZonesFromFile()
+        else
+            ply:ChatPrint("Failed to find the Optimized Area Spawner tool.")
+        end
+    else
+        ply:ChatPrint("You do not have permission to use this command.")
+    end
+end)
 end
